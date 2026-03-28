@@ -7,7 +7,8 @@ perfect for cutting plotters, laser engravers, or shirt prints.
 
 ## Features
 
-- **`POST /render`** – Upload a GPX file, receive an `image/svg+xml` response.
+- **Web UI** – Visit `http://localhost:8080` to upload a GPX file, configure options, preview the SVG inline, and download it with one click.
+- **`POST /render`** – REST API endpoint: upload a GPX file, receive an `image/svg+xml` response.
 - Equirectangular projection with automatic bounding-box scaling & centring.
 - Optional **frame** (border rectangle), **track name** and **stats** (distance + elevation gain) embedded as SVG text.
 - Designed for cutting plotters: black stroke, transparent background, no fill.
@@ -24,6 +25,8 @@ docker compose up --build
 ```
 
 The service listens on **`http://localhost:8080`**.
+
+Open **`http://localhost:8080`** in your browser to use the web UI.
 
 ### With Docker directly
 
@@ -115,15 +118,18 @@ curl -X POST "http://localhost:8080/render?width=800&height=800&unit=px&stroke_w
 strava3d/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py           # FastAPI app & /render endpoint
+│   ├── main.py           # FastAPI app, GET / (web UI) & POST /render endpoint
 │   ├── gpx_parser.py     # GPX parsing, distance & elevation helpers
-│   └── svg_renderer.py   # SVG normalisation & rendering
+│   ├── svg_renderer.py   # SVG normalisation & rendering
+│   └── static/
+│       └── index.html    # Self-contained web UI
 ├── tests/
 │   ├── fixtures/
 │   │   └── sample.gpx    # Minimal GPX for tests
 │   ├── test_api.py        # Integration tests (TestClient)
 │   ├── test_gpx_parser.py # Unit tests – parsing, distance, elevation
-│   └── test_svg_renderer.py # Unit tests – normalisation, SVG output
+│   ├── test_svg_renderer.py # Unit tests – normalisation, SVG output
+│   └── test_ui.py         # Tests for the web UI route
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt

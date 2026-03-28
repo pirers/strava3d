@@ -1,13 +1,17 @@
 """FastAPI application – GPX → SVG rendering service."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 from .gpx_parser import parse_gpx, project_points
 from .svg_renderer import render_svg
+
+_STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(
     title="strava3d – GPX to SVG renderer",
@@ -17,6 +21,14 @@ app = FastAPI(
     ),
     version="1.0.0",
 )
+
+app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+
+@app.get("/", response_class=FileResponse, include_in_schema=False)
+async def index() -> FileResponse:
+    """Serve the web UI."""
+    return FileResponse(_STATIC_DIR / "index.html", media_type="text/html")
 
 
 @app.post(
