@@ -332,6 +332,11 @@
           <span class="box"></span>
           Show stats (distance &amp; elevation)
         </label>
+        <label class="toggle-label">
+          <input type="checkbox" id="elevation_profile" name="elevation_profile" />
+          <span class="box"></span>
+          Elevation profile
+        </label>
       </div>
 
       <button type="submit" class="btn" id="submitBtn">
@@ -406,6 +411,7 @@
 
       params.set('frame', document.getElementById('frame').checked ? 'true' : 'false');
       params.set('stats', document.getElementById('stats').checked ? 'true' : 'false');
+      params.set('elevation_profile', document.getElementById('elevation_profile').checked ? 'true' : 'false');
 
       const url = '/render?' + params.toString();
 

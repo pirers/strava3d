@@ -1,7 +1,11 @@
 """SVG rendering helpers for GPX tracks."""
 from __future__ import annotations
 
+import math
 from typing import List, Optional, Tuple
+
+# Fraction of canvas height reserved for the elevation profile panel.
+_PROFILE_RATIO = 0.28
 
 
 def _normalize(
@@ -69,6 +73,84 @@ def _build_path(points: List[Tuple[float, float]]) -> str:
     return " ".join(parts)
 
 
+def _render_elevation_profile(
+    xy: List[Tuple[float, float]],
+    elevations: List[Optional[float]],
+    x_offset: float,
+    y_offset: float,
+    width: float,
+    height: float,
+    padding: float,
+    stroke_width: float,
+) -> List[str]:
+    """Render an elevation-profile polyline into a bounding box.
+
+    Args:
+        xy: Raw projected (x, y) coordinates in metres – used to compute
+            cumulative distance along the track (X axis of the profile).
+        elevations: Elevation in metres for each track point (may contain
+            ``None`` where data is absent).
+        x_offset: Left edge of the bounding box in SVG user units.
+        y_offset: Top edge of the bounding box in SVG user units.
+        width: Width of the bounding box in SVG user units.
+        height: Height of the bounding box in SVG user units.
+        padding: Inner padding applied on all sides.
+        stroke_width: Stroke width for the profile polyline.
+
+    Returns:
+        A list of SVG element strings (may be empty if data is insufficient).
+    """
+    if len(xy) < 2 or len(elevations) < 2:
+        return []
+
+    # Pair each index with its elevation value; skip missing elevations.
+    pairs: List[Tuple[int, float]] = [
+        (i, e) for i, e in enumerate(elevations) if e is not None and i < len(xy)
+    ]
+    if len(pairs) < 2:
+        return []
+
+    # Cumulative distances (metres) between successive projected points.
+    cum_dists: List[float] = [0.0]
+    for i in range(1, len(xy)):
+        dx = xy[i][0] - xy[i - 1][0]
+        dy = xy[i][1] - xy[i - 1][1]
+        cum_dists.append(cum_dists[-1] + math.sqrt(dx * dx + dy * dy))
+
+    total_dist = cum_dists[-1]
+    if total_dist == 0.0:
+        # Degenerate track: space points equally along the X axis.
+        total_dist = float(len(xy) - 1)
+        cum_dists = [float(i) for i in range(len(xy))]
+
+    eles = [e for _, e in pairs]
+    ele_min, ele_max = min(eles), max(eles)
+    ele_span = ele_max - ele_min
+
+    draw_w = width - 2 * padding
+    draw_h = height - 2 * padding
+    if draw_w <= 0 or draw_h <= 0:
+        return []
+
+    profile_pts: List[Tuple[float, float]] = []
+    for idx, ele in pairs:
+        d = cum_dists[idx] / total_dist  # normalised 0..1
+        px = x_offset + padding + d * draw_w
+        if ele_span > 0:
+            # Higher elevation → smaller SVG y (upward)
+            py = y_offset + padding + draw_h - ((ele - ele_min) / ele_span) * draw_h
+        else:
+            py = y_offset + padding + draw_h / 2  # flat profile: centre line
+        profile_pts.append((px, py))
+
+    path_d = _build_path(profile_pts)
+    sw = _fmt(stroke_width)
+    return [
+        f'  <path d="{path_d}" fill="none" stroke="black" '
+        f'stroke-width="{sw}" stroke-linecap="round" stroke-linejoin="round"/>'
+    ]
+
+
 def render_svg(
     xy: List[Tuple[float, float]],
     width: float,
@@ -79,6 +161,7 @@ def render_svg(
     frame: bool = False,
     name: Optional[str] = None,
     stats: Optional[str] = None,
+    elevations: Optional[List[Optional[float]]] = None,
 ) -> str:
     """Render an SVG string from projected track points.
 
@@ -92,12 +175,31 @@ def render_svg(
         frame: Whether to draw a border rectangle.
         name: Optional track name to render as text.
         stats: Optional stats string to render as text (e.g. ``"12.3 km | 456 m"``)
+        elevations: Optional per-point elevation values (metres). When provided
+            the bottom :data:`_PROFILE_RATIO` of the canvas is used to draw an
+            elevation-profile chart.
     """
-    # Reserve 15 % of height for text if name or stats are requested
+    # ── Layout ──────────────────────────────────────────────────────────────
+    # Canvas is split top-to-bottom:
+    #   [text zone]  [track map]  [separator]  [elevation profile]
+    #
+    # When elevation_profile is disabled (elevations=None), the profile zone
+    # and separator are zero-height, so the layout is unchanged vs. the
+    # original behaviour.
+
+    has_elev = elevations is not None and any(e is not None for e in elevations)
     has_text = bool(name or stats)
-    text_zone_h = height * 0.15 if has_text else 0.0
+
+    profile_zone_h = height * _PROFILE_RATIO if has_elev else 0.0
+    # A thin separator between track area and profile panel.
+    sep_h = stroke_width * 3 if has_elev else 0.0
+
+    # Height available for text + track map.
+    available_h = height - profile_zone_h - sep_h
+
+    text_zone_h = available_h * 0.15 if has_text else 0.0
     track_offset_y = text_zone_h
-    track_height = height - text_zone_h
+    track_height = available_h - text_zone_h
 
     normalised = _normalize(xy, width, track_height, padding)
 
@@ -146,6 +248,30 @@ def render_svg(
             f'fill="none" stroke="black" stroke-width="{_fmt(stroke_width)}" '
             f'stroke-linecap="round" stroke-linejoin="round"/>'
         )
+
+    # ── Elevation profile ────────────────────────────────────────────────────
+    if has_elev:
+        assert elevations is not None  # narrowing for type checkers
+        # Separator line between track area and profile panel.
+        sep_y = available_h + sep_h / 2
+        lines.append(
+            f'  <line x1="{_fmt(padding)}" y1="{sep_y:.3f}" '
+            f'x2="{_fmt(width - padding)}" y2="{sep_y:.3f}" '
+            f'stroke="black" stroke-width="{_fmt(stroke_width * 0.5)}"/>'
+        )
+        # Profile panel starts below the separator.
+        profile_y = available_h + sep_h
+        profile_lines = _render_elevation_profile(
+            xy=xy,
+            elevations=elevations,
+            x_offset=0.0,
+            y_offset=profile_y,
+            width=width,
+            height=profile_zone_h,
+            padding=padding,
+            stroke_width=stroke_width,
+        )
+        lines.extend(profile_lines)
 
     lines.append("</svg>")
     return "\n".join(lines)

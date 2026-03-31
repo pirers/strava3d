@@ -62,6 +62,7 @@ All other parameters are **query parameters** (append them to the URL):
 | `frame` | bool | `false` | Draw a border `<rect>` |
 | `name` | string | *(GPX track name)* | Track name as SVG `<text>`; falls back to the name embedded in the GPX file |
 | `stats` | bool | `false` | Embed distance (km) and elevation gain (m ↑) as SVG `<text>` |
+| `elevation_profile` | bool | `false` | Draw an elevation-profile chart in the bottom 28 % of the canvas |
 
 **Response:** `image/svg+xml` – the generated SVG.
 

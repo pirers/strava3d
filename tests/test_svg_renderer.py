@@ -155,3 +155,105 @@ def test_render_svg_xml_escaping():
     )
     assert "&lt;Track" in svg
     assert "&amp;" in svg
+
+
+# ── Elevation profile tests ──────────────────────────────────────────────────
+
+_ELEV_XY = [(0.0, 0.0), (500.0, 0.0), (1000.0, 0.0), (1500.0, 0.0), (2000.0, 0.0)]
+_ELEV_VALUES = [500.0, 520.0, 510.0, 540.0, 530.0]
+
+
+def test_render_svg_elevation_profile_contains_profile_path():
+    svg = render_svg(
+        xy=_ELEV_XY,
+        width=300,
+        height=300,
+        padding=10,
+        stroke_width=2,
+        unit="mm",
+        elevations=_ELEV_VALUES,
+    )
+    # Should contain at least two <path elements: track map + profile
+    assert svg.count("<path") >= 2
+
+
+def test_render_svg_elevation_profile_separator_line():
+    svg = render_svg(
+        xy=_ELEV_XY,
+        width=300,
+        height=300,
+        padding=10,
+        stroke_width=2,
+        unit="mm",
+        elevations=_ELEV_VALUES,
+    )
+    assert "<line" in svg
+
+
+def test_render_svg_no_elevation_profile_by_default():
+    """When elevations=None (default), no separator line is drawn."""
+    svg = render_svg(
+        xy=_ELEV_XY,
+        width=300,
+        height=300,
+        padding=10,
+        stroke_width=2,
+        unit="mm",
+    )
+    assert "<line" not in svg
+    assert svg.count("<path") == 1
+
+
+def test_render_svg_elevation_profile_all_none_skipped():
+    """If all elevation values are None, no profile is rendered."""
+    svg = render_svg(
+        xy=_ELEV_XY,
+        width=300,
+        height=300,
+        padding=10,
+        stroke_width=2,
+        unit="mm",
+        elevations=[None, None, None, None, None],
+    )
+    assert "<line" not in svg
+    assert svg.count("<path") == 1
+
+
+def test_render_svg_elevation_profile_flat():
+    """Flat elevation (constant) should still render without error."""
+    svg = render_svg(
+        xy=_ELEV_XY,
+        width=300,
+        height=300,
+        padding=10,
+        stroke_width=2,
+        unit="mm",
+        elevations=[500.0, 500.0, 500.0, 500.0, 500.0],
+    )
+    assert "<line" in svg
+    assert svg.count("<path") >= 2
+
+
+def test_render_svg_elevation_profile_dimensions_unchanged():
+    """Canvas dimensions must remain the same whether profile is on or off."""
+    svg_with = render_svg(
+        xy=_ELEV_XY,
+        width=300,
+        height=300,
+        padding=10,
+        stroke_width=2,
+        unit="mm",
+        elevations=_ELEV_VALUES,
+    )
+    svg_without = render_svg(
+        xy=_ELEV_XY,
+        width=300,
+        height=300,
+        padding=10,
+        stroke_width=2,
+        unit="mm",
+    )
+    assert 'width="300mm"' in svg_with
+    assert 'height="300mm"' in svg_with
+    assert 'width="300mm"' in svg_without
+    assert 'height="300mm"' in svg_without

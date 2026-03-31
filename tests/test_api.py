@@ -107,3 +107,21 @@ def test_render_name_from_gpx_when_not_overridden():
     assert resp.status_code == 200
     # Track name "Test Track" should appear since it's picked up from GPX
     assert "Test Track" in resp.text
+
+
+def test_render_elevation_profile():
+    """elevation_profile=true should produce a separator line and profile path."""
+    resp = client.post(
+        "/render?elevation_profile=true",
+        files={"gpx": ("t.gpx", _gpx_bytes())},
+    )
+    assert resp.status_code == 200
+    assert "<line" in resp.text
+    assert resp.text.count("<path") >= 2
+
+
+def test_render_no_elevation_profile_by_default():
+    """Default render must not include a separator line."""
+    resp = client.post("/render", files={"gpx": ("t.gpx", _gpx_bytes())})
+    assert resp.status_code == 200
+    assert "<line" not in resp.text
