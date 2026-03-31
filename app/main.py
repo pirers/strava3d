@@ -50,6 +50,7 @@ async def render(
     name: Optional[str] = Query(None, description="Track name to embed as text"),
     stats: bool = Query(False, description="Embed distance and elevation gain as text"),
     elevation_profile: bool = Query(False, description="Draw an elevation-profile chart below the track map"),
+    view_3d: bool = Query(False, description="Render an isometric 3-D view combining track and elevation data"),
 ) -> Response:
     """Render a GPX track as a plotter-ready SVG.
 
@@ -66,6 +67,7 @@ async def render(
     | `name` | *(none)* | Track name as SVG text |
     | `stats` | `false` | Distance & elevation as SVG text |
     | `elevation_profile` | `false` | Elevation-profile chart below track |
+    | `view_3d` | `false` | Isometric 3-D view combining track and elevation |
 
     **Note on elevation gain**: if no elevation data is present in the GPX,
     elevation gain is reported as 0 m.
@@ -99,7 +101,12 @@ async def render(
 
     xy = project_points(track_data.points)
 
-    elevations = [p.ele for p in track_data.points] if elevation_profile else None
+    # Elevations are needed for both the separate profile panel and the 3-D view.
+    elevations = (
+        [p.ele for p in track_data.points]
+        if elevation_profile or view_3d
+        else None
+    )
 
     svg_content = render_svg(
         xy=xy,
@@ -112,6 +119,7 @@ async def render(
         name=display_name,
         stats=stats_text,
         elevations=elevations,
+        view_3d=view_3d,
     )
 
     return Response(content=svg_content, media_type="image/svg+xml")

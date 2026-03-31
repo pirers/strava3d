@@ -337,6 +337,11 @@
           <span class="box"></span>
           Elevation profile
         </label>
+        <label class="toggle-label">
+          <input type="checkbox" id="view_3d" name="view_3d" />
+          <span class="box"></span>
+          3D view
+        </label>
       </div>
 
       <button type="submit" class="btn" id="submitBtn">
@@ -412,6 +417,7 @@
       params.set('frame', document.getElementById('frame').checked ? 'true' : 'false');
       params.set('stats', document.getElementById('stats').checked ? 'true' : 'false');
       params.set('elevation_profile', document.getElementById('elevation_profile').checked ? 'true' : 'false');
+      params.set('view_3d', document.getElementById('view_3d').checked ? 'true' : 'false');
 
       const url = '/render?' + params.toString();
 

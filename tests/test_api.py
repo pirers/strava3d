@@ -125,3 +125,22 @@ def test_render_no_elevation_profile_by_default():
     resp = client.post("/render", files={"gpx": ("t.gpx", _gpx_bytes())})
     assert resp.status_code == 200
     assert "<line" not in resp.text
+
+
+def test_render_view_3d():
+    """view_3d=true should produce a 3D isometric SVG with path elements."""
+    resp = client.post(
+        "/render?view_3d=true",
+        files={"gpx": ("t.gpx", _gpx_bytes())},
+    )
+    assert resp.status_code == 200
+    assert "<svg" in resp.text
+    assert "<path" in resp.text
+
+
+def test_render_view_3d_default_false():
+    """By default, view_3d is off and the flat map is used."""
+    resp = client.post("/render", files={"gpx": ("t.gpx", _gpx_bytes())})
+    assert resp.status_code == 200
+    # Flat map: no <g transform> wrapper from the 3-D renderer.
+    assert '<g transform=' not in resp.text
