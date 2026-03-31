@@ -320,7 +320,8 @@ def test_render_3d_track_has_elevated_path():
     assert len(paths) >= 1  # at least the elevated track path
 
 
-def test_render_3d_track_has_rib_lines():
+def test_render_3d_track_has_curtain_panels():
+    """Each segment must have a filled curtain panel between the track and ground."""
     elems = _render_3d_track(
         xy=_3D_XY,
         elevations=_3D_ELES,
@@ -329,8 +330,9 @@ def test_render_3d_track_has_rib_lines():
         padding=10,
         stroke_width=2,
     )
-    rib_lines = [e for e in elems if "<line" in e]
-    assert len(rib_lines) >= 1
+    # Curtain panels are closed paths with fill-opacity
+    panels = [e for e in elems if "fill-opacity" in e and "Z" in e]
+    assert len(panels) >= 1
 
 
 def test_render_3d_track_has_ground_shadow():

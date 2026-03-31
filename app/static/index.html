@@ -469,6 +469,19 @@
       // Inline SVG preview
       previewBox.innerHTML = svgText;
 
+      // Browsers do not execute <script> elements injected via innerHTML.
+      // Re-create them as live elements so the interactive JS runs.
+      previewBox.querySelectorAll('script').forEach(old => {
+        // Strip XML CDATA wrappers that are used for SVG/XML validity.
+        let code = (old.textContent || '').replace(/^\s*<!\[CDATA\[\s*/, '').replace(/\s*\]\]>\s*$/, '');
+        if (!code.trim()) return;
+        const s = document.createElement('script');
+        s.textContent = code;
+        // Append to document.body to trigger synchronous execution, then remove.
+        document.body.appendChild(s);
+        document.body.removeChild(s);
+      });
+
       // Download link via Blob URL
       const blob = new Blob([svgText], { type: 'image/svg+xml' });
       const old  = downloadLnk.href;

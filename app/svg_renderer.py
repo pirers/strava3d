@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import math
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # Fraction of canvas height reserved for the elevation profile panel.
 _PROFILE_RATIO = 0.28
@@ -389,6 +389,7 @@ def _render_3d_track(
     ground_svg = [_to_svg(*p) for p in ground_pts]
 
     lines: List[str] = []
+    n = len(xy)
 
     # 1. Dashed ground-level shadow.
     lines.append('  <g id="iso3d-ground">')
@@ -404,24 +405,27 @@ def _render_3d_track(
         )
     lines.append("  </g>")
 
-    # 2. Vertical rib lines at ~every 10 % of the points.
-    lines.append('  <g id="iso3d-ribs">')
-    n = len(xy)
-    rib_step = max(1, n // 10)
-    rib_indices: Set[int] = set(range(0, n, rib_step))
-    rib_indices.add(n - 1)  # always include the last point
-    thin_sw = _fmt(stroke_width * 0.5)
-    for i in sorted(rib_indices):
-        ex, ey = elev_svg[i]
-        gx, gy = ground_svg[i]
+    # 2. Curtain panels – one filled trapezoid per segment, coloured by gradient.
+    #    Each panel spans from elev[i] → elev[i+1] → ground[i+1] → ground[i].
+    lines.append('  <g id="iso3d-curtains">')
+    for i in range(n - 1):
+        ex1, ey1 = elev_svg[i]
+        ex2, ey2 = elev_svg[i + 1]
+        gx2, gy2 = ground_svg[i + 1]
+        gx1, gy1 = ground_svg[i]
+        color = seg_colors[i] if i < len(seg_colors) else "#888"
+        panel_d = (
+            f"M {ex1:.3f},{ey1:.3f} "
+            f"L {ex2:.3f},{ey2:.3f} "
+            f"L {gx2:.3f},{gy2:.3f} "
+            f"L {gx1:.3f},{gy1:.3f} Z"
+        )
         lines.append(
-            f'    <line x1="{ex:.3f}" y1="{ey:.3f}" '
-            f'x2="{gx:.3f}" y2="{gy:.3f}" '
-            f'stroke="#888" stroke-width="{thin_sw}"/>'
+            f'    <path d="{panel_d}" fill="{color}" fill-opacity="0.7" stroke="none"/>'
         )
     lines.append("  </g>")
 
-    # 3. Gradient-coloured elevated track segments grouped by colour.
+    # 3. Gradient-coloured elevated track line on top of the curtains.
     lines.append('  <g id="iso3d-track">')
     sw = _fmt(stroke_width)
     i = 0
@@ -542,14 +546,14 @@ def _build_3d_script(
     var wrap = document.getElementById('iso3d-wrap');
     if (!wrap) return;
 
-    // Clear previous dynamic content, preserving static sub-groups by id.
+    // Clear previous dynamic content.
     var dyn = document.getElementById('iso3d-dyn');
     if (dyn) wrap.removeChild(dyn);
     dyn = document.createElementNS(NS, 'g');
     dyn.setAttribute('id', 'iso3d-dyn');
 
     // Hide static fallback content.
-    ['iso3d-ground', 'iso3d-ribs', 'iso3d-track'].forEach(function (id) {{
+    ['iso3d-ground', 'iso3d-curtains', 'iso3d-track'].forEach(function (id) {{
       var el2 = document.getElementById(id);
       if (el2) el2.setAttribute('display', 'none');
     }});
@@ -562,25 +566,23 @@ def _build_3d_script(
       'stroke-width': thin, 'stroke-dasharray': dash + ' ' + gap2, 'stroke-linecap': 'round'
     }}));
 
-    // Rib lines.
-    var step = Math.max(1, Math.floor(n / 10));
-    var thinSW = (SW * 0.5).toFixed(2);
-    for (var i = 0; i < n; i += step) {{
-      dyn.appendChild(mkEl('line', {{
-        x1: ef[i][0].toFixed(2), y1: ef[i][1].toFixed(2),
-        x2: gf[i][0].toFixed(2), y2: gf[i][1].toFixed(2),
-        stroke: '#888', 'stroke-width': thinSW
-      }}));
-    }}
-    if ((n - 1) % step !== 0) {{
-      dyn.appendChild(mkEl('line', {{
-        x1: ef[n-1][0].toFixed(2), y1: ef[n-1][1].toFixed(2),
-        x2: gf[n-1][0].toFixed(2), y2: gf[n-1][1].toFixed(2),
-        stroke: '#888', 'stroke-width': thinSW
+    // Curtain panels – filled trapezoids coloured by gradient.
+    for (var i = 0; i < n - 1; i++) {{
+      var col = COLORS[i] || '#888';
+      var ex1 = ef[i][0].toFixed(2), ey1 = ef[i][1].toFixed(2);
+      var ex2 = ef[i + 1][0].toFixed(2), ey2 = ef[i + 1][1].toFixed(2);
+      var gx2 = gf[i + 1][0].toFixed(2), gy2 = gf[i + 1][1].toFixed(2);
+      var gx1 = gf[i][0].toFixed(2), gy1 = gf[i][1].toFixed(2);
+      var panel = 'M ' + ex1 + ',' + ey1 +
+                  ' L ' + ex2 + ',' + ey2 +
+                  ' L ' + gx2 + ',' + gy2 +
+                  ' L ' + gx1 + ',' + gy1 + ' Z';
+      dyn.appendChild(mkEl('path', {{
+        d: panel, fill: col, 'fill-opacity': '0.7', stroke: 'none'
       }}));
     }}
 
-    // Gradient-coloured track segments (group consecutive same-colour runs).
+    // Gradient-coloured track line on top (group consecutive same-colour runs).
     var j = 0;
     while (j < n - 1) {{
       var col = COLORS[j] || 'black';
@@ -782,7 +784,7 @@ def render_svg(
             f'  <rect id="iso3d-hitarea" '
             f'x="0" y="{track_offset_y:.3f}" '
             f'width="{_fmt(width)}" height="{_fmt(track_height)}" '
-            f'fill="transparent" style="cursor:grab;"/>'
+            f'fill="transparent" pointer-events="all" style="cursor:grab;"/>'
         )
 
         # Embed the interactive JS script (only when track data is available).
