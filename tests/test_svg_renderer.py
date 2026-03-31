@@ -454,3 +454,176 @@ def test_render_svg_view_3d_no_elevations_still_renders():
     assert "<svg" in svg
     # The 3-D view with no elevation data will produce a flat isometric projection.
     assert "<path" in svg
+
+
+# ── Gradient colour coding tests ─────────────────────────────────────────────
+
+from app.svg_renderer import _gradient_color, _compute_segment_colors, _compute_3d_points
+
+# Long track that spans more than 1 km to exercise the bucket logic.
+_LONG_XY = [(float(i * 250), 0.0) for i in range(9)]  # 0–2000 m in 250 m steps
+_LONG_ELES = [500.0, 510.0, 520.0, 515.0, 505.0, 495.0, 490.0, 500.0, 510.0]
+
+
+def test_gradient_color_uphill_is_red():
+    color = _gradient_color(5.0)
+    assert "hsl(0," in color  # hue 0 = red
+
+
+def test_gradient_color_downhill_is_green():
+    color = _gradient_color(-5.0)
+    assert "hsl(120," in color  # hue 120 = green
+
+
+def test_gradient_color_flat_is_grey():
+    color = _gradient_color(0.0)
+    assert color == "hsl(0,0%,65%)"
+
+
+def test_gradient_color_steep_uphill_darker_than_gentle():
+    steep = _gradient_color(12.0)
+    gentle = _gradient_color(2.0)
+    # Lightness value is the third token; lower means darker.
+    def _lightness(hsl: str) -> int:
+        return int(hsl.split(",")[2].rstrip("%)"))
+    assert _lightness(steep) < _lightness(gentle)
+
+
+def test_gradient_color_steep_downhill_darker_than_gentle():
+    steep = _gradient_color(-12.0)
+    gentle = _gradient_color(-2.0)
+    def _lightness(hsl: str) -> int:
+        return int(hsl.split(",")[2].rstrip("%)"))
+    assert _lightness(steep) < _lightness(gentle)
+
+
+def test_compute_segment_colors_length():
+    colors = _compute_segment_colors(_LONG_XY, _LONG_ELES)
+    assert len(colors) == len(_LONG_XY) - 1
+
+
+def test_compute_segment_colors_uphill_bucket_is_red():
+    """The first 1 km bucket climbs: should be a red hue."""
+    colors = _compute_segment_colors(_LONG_XY, _LONG_ELES)
+    # First few segments are in the first 1 km bucket which has net ascent.
+    assert "hsl(0," in colors[0]
+
+
+def test_compute_segment_colors_empty_returns_empty():
+    assert _compute_segment_colors([], []) == []
+
+
+def test_compute_segment_colors_single_point_returns_empty():
+    assert _compute_segment_colors([(0.0, 0.0)], [500.0]) == []
+
+
+def test_compute_segment_colors_degenerate_zero_distance():
+    """All-same XY (zero distance) should not raise and return grey colours."""
+    same_xy = [(0.0, 0.0)] * 4
+    eles = [500.0, 510.0, 520.0, 530.0]
+    colors = _compute_segment_colors(same_xy, eles)
+    assert len(colors) == 3
+    for c in colors:
+        assert c == "hsl(0,0%,65%)"
+
+
+def test_compute_3d_points_length():
+    eles = [float(e) for e in _LONG_ELES]
+    pts3d, seg_colors = _compute_3d_points(_LONG_XY, eles)
+    assert len(pts3d) == len(_LONG_XY)
+    assert len(seg_colors) == len(_LONG_XY) - 1
+
+
+def test_compute_3d_points_normalized_range():
+    eles = [float(e) for e in _LONG_ELES]
+    pts3d, _ = _compute_3d_points(_LONG_XY, eles)
+    for nx, ny, nz in pts3d:
+        assert 0.0 <= nx <= 1.0
+        assert 0.0 <= ny <= 1.0
+        assert 0.0 <= nz <= 1.0
+
+
+# ── Interactive 3-D view tests ───────────────────────────────────────────────
+
+from app.svg_renderer import _build_3d_script
+
+_SC_PTS3D = [(0.0, 0.0, 0.0), (0.5, 0.0, 0.5), (1.0, 0.0, 1.0)]
+_SC_COLORS = ["hsl(0,85%,60%)", "hsl(120,70%,60%)"]
+
+
+def test_build_3d_script_returns_script_tag():
+    s = _build_3d_script(_SC_PTS3D, _SC_COLORS, 300, 300, 10, 2)
+    assert "<script" in s
+    assert "</script>" in s
+
+
+def test_build_3d_script_contains_embedded_points():
+    s = _build_3d_script(_SC_PTS3D, _SC_COLORS, 300, 300, 10, 2)
+    # The JSON-encoded point data must appear in the script.
+    assert "0.5" in s  # middle point's nx value
+
+
+def test_build_3d_script_contains_cdata():
+    s = _build_3d_script(_SC_PTS3D, _SC_COLORS, 300, 300, 10, 2)
+    assert "<![CDATA[" in s
+
+
+def test_render_svg_3d_contains_script():
+    """view_3d=True must embed a <script> element for interactive rotation."""
+    svg = render_svg(
+        xy=_3D_XY,
+        width=300,
+        height=300,
+        padding=10,
+        stroke_width=2,
+        unit="mm",
+        elevations=_3D_ELES,
+        view_3d=True,
+    )
+    assert "<script" in svg
+
+
+def test_render_svg_3d_contains_hit_area():
+    """view_3d=True must include the mouse hit-area rectangle."""
+    svg = render_svg(
+        xy=_3D_XY,
+        width=300,
+        height=300,
+        padding=10,
+        stroke_width=2,
+        unit="mm",
+        elevations=_3D_ELES,
+        view_3d=True,
+    )
+    assert 'id="iso3d-hitarea"' in svg
+
+
+def test_render_svg_3d_gradient_colored_track():
+    """The 3-D track path should use gradient-coded colours, not plain black."""
+    svg = render_svg(
+        xy=_LONG_XY,
+        width=300,
+        height=300,
+        padding=10,
+        stroke_width=2,
+        unit="mm",
+        elevations=_LONG_ELES,
+        view_3d=True,
+    )
+    # At least one path should carry an hsl() colour (uphill or downhill).
+    assert "hsl(" in svg
+
+
+def test_render_svg_3d_wrap_group_has_id():
+    """The wrapper <g> must have id='iso3d-wrap' for the JS to target."""
+    svg = render_svg(
+        xy=_3D_XY,
+        width=300,
+        height=300,
+        padding=10,
+        stroke_width=2,
+        unit="mm",
+        elevations=_3D_ELES,
+        view_3d=True,
+    )
+    assert 'id="iso3d-wrap"' in svg
