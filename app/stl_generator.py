@@ -35,7 +35,6 @@ _FONT_5X7: dict[str, List[int]] = {
     '"': [0x07, 0x00, 0x07, 0x00, 0x00],
     "#": [0x14, 0x7F, 0x14, 0x7F, 0x14],
     "$": [0x24, 0x2A, 0x7F, 0x2A, 0x12],
-    "%": [0x23, 0x13, 0x08, 0x64, 0x62],
     "&": [0x36, 0x49, 0x55, 0x22, 0x50],
     "'": [0x00, 0x05, 0x03, 0x00, 0x00],
     "(": [0x00, 0x1C, 0x22, 0x41, 0x00],
@@ -184,7 +183,8 @@ _CHAR_H = 7 * _PX + _PX  # character height including gap
 
 def _char_triangles(ch: str, x0: float, y0: float, z_base: float) -> List[Triangle]:
     """Return STL triangles for a single embossed character at position (x0, y0)."""
-    cols = _FONT_5X7.get(ch.upper() if ch.upper() in _FONT_5X7 else ch, _FONT_5X7.get(" ", [0]*5))
+    ch_upper = ch.upper()
+    cols = _FONT_5X7.get(ch_upper if ch_upper in _FONT_5X7 else ch, _FONT_5X7.get(" ", [0]*5))
     tris: List[Triangle] = []
     for col_idx, col_bits in enumerate(cols):
         for row_idx in range(7):
