@@ -1,14 +1,18 @@
 """FastAPI application – GPX → SVG rendering service."""
 from __future__ import annotations
 
+import io
+import zipfile
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from .dem_fetcher import bounding_box_with_padding, fetch_dem_grid
 from .gpx_parser import parse_gpx, project_points
+from .stl_generator import TerrainModelConfig, generate_terrain_stls
 from .svg_renderer import render_svg
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -123,3 +127,148 @@ async def render(
     )
 
     return Response(content=svg_content, media_type="image/svg+xml")
+
+
+@app.post(
+    "/render_terrain",
+    responses={
+        200: {
+            "content": {"application/zip": {}},
+            "description": "ZIP archive containing terrain.stl and track.stl",
+        },
+        400: {"description": "Invalid input (bad GPX or parameters)"},
+    },
+)
+async def render_terrain(
+    gpx: UploadFile = File(..., description="GPX file to render"),
+    terrain_padding_km: float = Query(
+        0.5,
+        ge=0,
+        description="Extra terrain to include around the track (km)",
+    ),
+    model_size_mm: float = Query(
+        150.0,
+        gt=0,
+        description="Longest side of the printed terrain block (mm)",
+    ),
+    base_thickness_mm: float = Query(
+        3.0,
+        gt=0,
+        description="Thickness of the solid base plate (mm)",
+    ),
+    terrain_height_mm: float = Query(
+        20.0,
+        gt=0,
+        description="Maximum terrain relief above the base plate (mm)",
+    ),
+    track_width_mm: float = Query(
+        2.0,
+        gt=0,
+        description="Width of the raised track ribbon (mm)",
+    ),
+    track_raised_mm: float = Query(
+        0.8,
+        gt=0,
+        description="Height the track ribbon is raised above the terrain (mm)",
+    ),
+    dem_resolution: int = Query(
+        128,
+        ge=16,
+        le=512,
+        description="DEM grid resolution (points per side; higher = more detail, slower)",
+    ),
+) -> StreamingResponse:
+    """Generate a 3-D printable terrain model from a GPX track.
+
+    Returns a ZIP archive with two binary STL files:
+
+    * **terrain.stl** – terrain surface and solid base plate.  Print in your
+      main filament colour.
+    * **track.stl** – raised ribbon following the GPS route.  Assign a
+      contrasting colour (e.g. via filament swap or multi-material).
+
+    The base plate label includes the route name, distance, elevation gain and
+    average gradient embossed in a pixel font.
+
+    **Query parameters:**
+
+    | Parameter | Default | Description |
+    |-----------|---------|-------------|
+    | `terrain_padding_km` | 0.5 | Extra terrain beyond the track bounding box (km) |
+    | `model_size_mm` | 150 | Longest side of the printed block (mm) |
+    | `base_thickness_mm` | 3 | Base plate thickness (mm) |
+    | `terrain_height_mm` | 20 | Maximum terrain relief (mm) |
+    | `track_width_mm` | 2 | Track ribbon width (mm) |
+    | `track_raised_mm` | 0.8 | Track ribbon height above terrain (mm) |
+    | `dem_resolution` | 128 | DEM grid size (points per side) |
+    """
+    raw_bytes = await gpx.read()
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded GPX file is empty")
+
+    try:
+        track_data = parse_gpx(raw_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    lats = [p.lat for p in track_data.points]
+    lons = [p.lon for p in track_data.points]
+
+    lat_min, lat_max, lon_min, lon_max = bounding_box_with_padding(
+        lats, lons, terrain_padding_km
+    )
+
+    try:
+        dem = fetch_dem_grid(
+            lat_min, lat_max, lon_min, lon_max,
+            n_rows=dem_resolution,
+            n_cols=dem_resolution,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch DEM data: {exc}",
+        ) from exc
+
+    config = TerrainModelConfig(
+        model_size_mm=model_size_mm,
+        base_thickness_mm=base_thickness_mm,
+        terrain_height_mm=terrain_height_mm,
+        track_raised_mm=track_raised_mm,
+        track_width_mm=track_width_mm,
+    )
+
+    try:
+        terrain_stl, track_stl = generate_terrain_stls(track_data, dem, config)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"STL generation failed: {exc}",
+        ) from exc
+
+    # Bundle both STL files into a ZIP archive
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("terrain.stl", terrain_stl)
+        zf.writestr("track.stl", track_stl)
+        readme = (
+            "strava3d – 3D printable terrain model\n"
+            "======================================\n\n"
+            "Files:\n"
+            "  terrain.stl  – terrain surface + base plate (main colour)\n"
+            "  track.stl    – GPS track ribbon (accent colour)\n\n"
+            "Import both files into your slicer and assign different colours.\n"
+            "For single-extruder printers, use a filament-swap colour change\n"
+            f"at z = {base_thickness_mm + terrain_height_mm:.1f} mm.\n"
+        )
+        zf.writestr("README.txt", readme)
+    buf.seek(0)
+
+    track_name = (track_data.name or "terrain").replace(" ", "_")
+    filename = f"{track_name}_3d.zip"
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

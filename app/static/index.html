@@ -264,6 +264,68 @@
       width: auto;
     }
 
+    /* ── Terrain card ─────────────────────────────────────────────────────── */
+    .card-terrain {
+      background: #1a2535;
+      border: 1px solid #2d4a6a;
+      border-radius: 1rem;
+      padding: 2rem;
+      width: 100%;
+      max-width: 540px;
+      margin-top: 1.5rem;
+    }
+    .card-terrain h2 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #7dd3fc;
+      margin-bottom: .4rem;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+    .card-terrain .subtitle {
+      font-size: .85rem;
+      color: #64748b;
+      margin-bottom: 1.5rem;
+    }
+    .btn-terrain {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: .5rem;
+      background: #0369a1;
+      color: white;
+      font-size: .95rem;
+      font-weight: 700;
+      border: none;
+      border-radius: .65rem;
+      padding: .75rem 1.75rem;
+      cursor: pointer;
+      width: 100%;
+      transition: background .2s, transform .1s;
+      margin-top: .5rem;
+    }
+    .btn-terrain:hover:not(:disabled) { background: #0284c7; }
+    .btn-terrain:active:not(:disabled) { transform: scale(.98); }
+    .btn-terrain:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-terrain .spinner {
+      width: 1rem;
+      height: 1rem;
+      border: 2px solid rgba(255,255,255,.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      display: none;
+    }
+    .btn-terrain.loading .spinner { display: block; }
+    .btn-terrain.loading .btn-text { display: none; }
+    .terrain-note {
+      font-size: .8rem;
+      color: #475569;
+      margin-top: .75rem;
+      text-align: center;
+    }
+
     /* ── Responsive ───────────────────────────────────────────────────────── */
     @media (max-width: 480px) {
       .grid { grid-template-columns: 1fr; }
@@ -352,6 +414,60 @@
       <div class="error-box" id="errorBox"></div>
 
     </form>
+  </div>
+
+  <!-- Terrain 3D print card -->
+  <div class="card-terrain">
+    <h2>🏔️ 3D Printable Terrain Model</h2>
+    <p class="subtitle">
+      Generates two STL files from real SRTM elevation data — one for the terrain
+      and base plate, one for the track ribbon — ready for dual-colour 3D printing.
+      Uses the same GPX file selected above.
+    </p>
+
+    <div class="grid">
+      <div class="field">
+        <label for="t_padding">Terrain padding (km)</label>
+        <input type="number" id="t_padding" value="0.5" min="0" step="0.1" />
+      </div>
+      <div class="field">
+        <label for="t_model_size">Model size (mm)</label>
+        <input type="number" id="t_model_size" value="150" min="20" step="5" />
+      </div>
+      <div class="field">
+        <label for="t_base">Base thickness (mm)</label>
+        <input type="number" id="t_base" value="3" min="1" step="0.5" />
+      </div>
+      <div class="field">
+        <label for="t_terrain_h">Terrain height (mm)</label>
+        <input type="number" id="t_terrain_h" value="20" min="2" step="1" />
+      </div>
+      <div class="field">
+        <label for="t_track_w">Track width (mm)</label>
+        <input type="number" id="t_track_w" value="2" min="0.5" step="0.5" />
+      </div>
+      <div class="field">
+        <label for="t_track_r">Track raised (mm)</label>
+        <input type="number" id="t_track_r" value="0.8" min="0.2" step="0.2" />
+      </div>
+      <div class="field full">
+        <label for="t_dem_res">DEM resolution (grid points per side)</label>
+        <select id="t_dem_res">
+          <option value="64">64 – fast preview</option>
+          <option value="128" selected>128 – standard</option>
+          <option value="256">256 – detailed (slow)</option>
+        </select>
+      </div>
+    </div>
+
+    <button class="btn-terrain" id="terrainBtn">
+      <span class="spinner"></span>
+      <span class="btn-text">⬇ Download 3D Terrain (ZIP)</span>
+    </button>
+    <div class="error-box" id="terrainErrorBox"></div>
+    <p class="terrain-note">
+      ⏳ Fetching SRTM elevation tiles may take 10–60 s on first use (data is cached afterwards).
+    </p>
   </div>
 
   <!-- Result -->
@@ -495,6 +611,69 @@
       resultSec.classList.add('visible');
       resultSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
+    /* ── Terrain 3D print ──────────────────────────────────────────────── */
+    const terrainBtn      = document.getElementById('terrainBtn');
+    const terrainErrorBox = document.getElementById('terrainErrorBox');
+
+    terrainBtn.addEventListener('click', async () => {
+      terrainErrorBox.classList.remove('visible');
+
+      if (!fileInput.files[0]) {
+        terrainErrorBox.textContent = 'Please select a GPX file first (in the card above).';
+        terrainErrorBox.classList.add('visible');
+        return;
+      }
+
+      const params = new URLSearchParams({
+        terrain_padding_km: document.getElementById('t_padding').value,
+        model_size_mm:      document.getElementById('t_model_size').value,
+        base_thickness_mm:  document.getElementById('t_base').value,
+        terrain_height_mm:  document.getElementById('t_terrain_h').value,
+        track_width_mm:     document.getElementById('t_track_w').value,
+        track_raised_mm:    document.getElementById('t_track_r').value,
+        dem_resolution:     document.getElementById('t_dem_res').value,
+      });
+
+      const fd = new FormData();
+      fd.append('gpx', fileInput.files[0]);
+
+      terrainBtn.disabled = true;
+      terrainBtn.classList.add('loading');
+
+      try {
+        const resp = await fetch('/render_terrain?' + params.toString(), {
+          method: 'POST',
+          body: fd,
+        });
+
+        if (!resp.ok) {
+          let msg = `Server error ${resp.status}`;
+          try { const j = await resp.json(); msg = j.detail || msg; } catch (_) {}
+          terrainErrorBox.textContent = msg;
+          terrainErrorBox.classList.add('visible');
+          return;
+        }
+
+        // Trigger browser download
+        const blob = await resp.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        const base = fileInput.files[0].name.replace(/\.gpx$/i, '') || 'terrain';
+        a.href     = url;
+        a.download = base + '_3d.zip';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+      } catch (err) {
+        terrainErrorBox.textContent = 'Network error: ' + err.message;
+        terrainErrorBox.classList.add('visible');
+      } finally {
+        terrainBtn.disabled = false;
+        terrainBtn.classList.remove('loading');
+      }
+    });
   </script>
 
 </body>
