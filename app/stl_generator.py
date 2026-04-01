@@ -266,6 +266,15 @@ class TerrainModelConfig:
     track_width_mm: float = 2.0
     """Width of the track ribbon (mm)."""
 
+    sea_level_m: float = 0.0
+    """Elevation threshold in metres (real-world) for water detection.
+
+    DEM cells at or below this elevation are treated as water and included in
+    the separate ``water.stl`` body so that slicers can assign a blue filament.
+    SRTM returns 0 m for ocean and large water bodies, so the default of 0.0
+    is appropriate for most coastal and lake scenarios.
+    """
+
     label_height_mm: float = 10.0
     """Height of the text label band at the front of the base plate (mm)."""
 
@@ -367,7 +376,7 @@ def _perp2d(dx: float, dy: float, width: float) -> Tuple[float, float]:
 
 
 def _build_track_triangles(
-    xy_norm: List[Tuple[float, float]],
+    points: List["TrackPoint"],
     dem: DemGrid,
     config: TerrainModelConfig,
     x_size: float,
@@ -375,70 +384,45 @@ def _build_track_triangles(
     z_terrain_base: float,
     ele_min: float,
     ele_range: float,
-    lat_min: float,
-    lat_max: float,
-    lon_min: float,
-    lon_max: float,
 ) -> List[Triangle]:
     """Return triangles for a flat ribbon following the GPS track.
 
     The ribbon is raised *track_raised_mm* above the terrain surface at each
     GPS point so that it prints on top of the terrain with a filament swap.
+
+    Track points are mapped directly from their lat/lon coordinates into the
+    model's XY space using the DEM bounding box, so any terrain padding is
+    correctly reflected in the track's position on the model.
     """
     tris: List[Triangle] = []
-    n = len(xy_norm)
+    n = len(points)
     if n < 2:
         return tris
 
-    xy_m_min = (min(x for x, _ in xy_norm), min(y for _, y in xy_norm))
-    xy_m_max = (max(x for x, _ in xy_norm), max(y for _, y in xy_norm))
-    span_x = xy_m_max[0] - xy_m_min[0]
-    span_y = xy_m_max[1] - xy_m_min[1]
+    lon_span = dem.lon_max - dem.lon_min
+    lat_span = dem.lat_max - dem.lat_min
 
-    def _to_model(xi: float, yi: float) -> Tuple[float, float]:
-        """Convert projected metres to model mm."""
-        if span_x > 1e-6:
-            mx = (xi - xy_m_min[0]) / span_x * x_size
-        else:
-            mx = x_size / 2
-        if span_y > 1e-6:
-            my = (yi - xy_m_min[1]) / span_y * y_size
-        else:
-            my = y_size / 2
+    def _to_model(lat: float, lon: float) -> Tuple[float, float]:
+        """Map a lat/lon coordinate to model XY (mm) via the DEM bounding box."""
+        mx = (lon - dem.lon_min) / lon_span * x_size if lon_span > 1e-9 else x_size / 2
+        my = (lat - dem.lat_min) / lat_span * y_size if lat_span > 1e-9 else y_size / 2
         return (mx, my)
 
-    def _lat_lon_at(xi: float, yi: float) -> Tuple[float, float]:
-        """Approximate lat/lon from projected (xi, yi) in metres."""
-        if span_x > 1e-6:
-            t_x = (xi - xy_m_min[0]) / span_x
-        else:
-            t_x = 0.5
-        if span_y > 1e-6:
-            t_y = (yi - xy_m_min[1]) / span_y
-        else:
-            t_y = 0.5
-        lat = lat_min + t_y * (lat_max - lat_min)
-        lon = lon_min + t_x * (lon_max - lon_min)
-        return (lat, lon)
-
-    def _z_at(xi: float, yi: float) -> float:
-        lat, lon = _lat_lon_at(xi, yi)
+    def _z_at(lat: float, lon: float) -> float:
         terrain_ele = dem.sample(lat, lon)
         return z_terrain_base + _map_elevation(terrain_ele, ele_min, ele_range, config) + config.track_raised_mm
 
-    half_w = config.track_width_mm / 2.0
-
     for i in range(n - 1):
-        xi0, yi0 = xy_norm[i]
-        xi1, yi1 = xy_norm[i + 1]
-        mx0, my0 = _to_model(xi0, yi0)
-        mx1, my1 = _to_model(xi1, yi1)
+        pt0 = points[i]
+        pt1 = points[i + 1]
+        mx0, my0 = _to_model(pt0.lat, pt0.lon)
+        mx1, my1 = _to_model(pt1.lat, pt1.lon)
 
         dx, dy = mx1 - mx0, my1 - my0
         px, py = _perp2d(dx, dy, config.track_width_mm)
 
-        z0 = _z_at(xi0, yi0)
-        z1 = _z_at(xi1, yi1)
+        z0 = _z_at(pt0.lat, pt0.lon)
+        z1 = _z_at(pt1.lat, pt1.lon)
         z_bottom = 0.0
 
         # Four corners of ribbon segment top face
@@ -547,6 +531,94 @@ def _build_label_triangles(
 
 
 # ---------------------------------------------------------------------------
+# Water surface STL builder
+# ---------------------------------------------------------------------------
+
+# Thickness of the water slab above the scaled sea level (mm).
+# ~3 print layers at 0.2 mm layer height – enough for the slicer to assign
+# a second colour without being visible as a raised ridge.
+_WATER_THICKNESS_MM = 0.6
+
+
+def _build_water_triangles(
+    dem: DemGrid,
+    config: TerrainModelConfig,
+    x_size: float,
+    y_size: float,
+    z_terrain_base: float,
+    ele_min: float,
+    ele_range: float,
+) -> List[Triangle]:
+    """Return triangles for a thin slab covering DEM cells at or below sea level.
+
+    Every grid quad whose elevation is entirely at or below ``config.sea_level_m``
+    gets a closed box slab from the mapped sea-level height to that height plus
+    ``_WATER_THICKNESS_MM``.  Slicers (PrusaSlicer, Bambu Studio) can import
+    this as a second model body and assign a blue filament to it.
+
+    If no water cells exist in the DEM (fully landlocked area), an empty list
+    is returned.
+    """
+    nr, nc = dem.n_rows, dem.n_cols
+    tris: List[Triangle] = []
+
+    # Map real-world sea level to model z.
+    # Clamp to z_terrain_base if sea_level_m is below the DEM minimum so that
+    # the water slab stays inside the model volume.
+    sea_z = z_terrain_base + max(0.0, _map_elevation(config.sea_level_m, ele_min, ele_range, config))
+    water_top_z = sea_z + _WATER_THICKNESS_MM
+
+    for r in range(nr - 1):
+        for c in range(nc - 1):
+            # All four corners must be at or below sea level for a water cell.
+            if any(
+                dem.elevations[r + dr][c + dc] > config.sea_level_m
+                for dr, dc in ((0, 0), (0, 1), (1, 0), (1, 1))
+            ):
+                continue
+
+            # XY bounds of this cell in model space.
+            x0 = c / (nc - 1) * x_size
+            x1 = (c + 1) / (nc - 1) * x_size
+            # Row 0 is north (high y); row r+1 is south (low y).
+            y0 = (1 - (r + 1) / (nr - 1)) * y_size  # south edge of cell
+            y1 = (1 - r / (nr - 1)) * y_size         # north edge of cell
+
+            # Top face (outward normal = up)
+            tris += _quad(
+                (x0, y0, water_top_z), (x1, y0, water_top_z),
+                (x1, y1, water_top_z), (x0, y1, water_top_z),
+            )
+            # Bottom face (outward normal = down)
+            tris += _quad(
+                (x0, y1, sea_z), (x1, y1, sea_z),
+                (x1, y0, sea_z), (x0, y0, sea_z),
+            )
+            # South wall (y = y0, outward normal = south / −y)
+            tris += _quad(
+                (x0, y0, sea_z), (x1, y0, sea_z),
+                (x1, y0, water_top_z), (x0, y0, water_top_z),
+            )
+            # North wall (y = y1, outward normal = north / +y)
+            tris += _quad(
+                (x1, y1, sea_z), (x0, y1, sea_z),
+                (x0, y1, water_top_z), (x1, y1, water_top_z),
+            )
+            # West wall (x = x0, outward normal = west / −x)
+            tris += _quad(
+                (x0, y1, sea_z), (x0, y0, sea_z),
+                (x0, y0, water_top_z), (x0, y1, water_top_z),
+            )
+            # East wall (x = x1, outward normal = east / +x)
+            tris += _quad(
+                (x1, y0, sea_z), (x1, y1, sea_z),
+                (x1, y1, water_top_z), (x1, y0, water_top_z),
+            )
+
+    return tris
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -554,16 +626,19 @@ def generate_terrain_stls(
     track_data: TrackData,
     dem: DemGrid,
     config: Optional[TerrainModelConfig] = None,
-) -> Tuple[bytes, bytes]:
-    """Generate two binary STL byte strings from a GPS track and DEM grid.
+) -> Tuple[bytes, bytes, bytes]:
+    """Generate three binary STL byte strings from a GPS track and DEM grid.
 
     Returns:
-        ``(terrain_stl, track_stl)`` where
+        ``(terrain_stl, track_stl, water_stl)`` where
 
         * *terrain_stl* is the solid terrain + base plate body.
         * *track_stl* is the track ribbon (print in a contrasting colour).
+        * *water_stl* covers DEM cells at or below ``config.sea_level_m``
+          (print in blue; empty – 0 triangles – when the area is fully
+          landlocked).
 
-    The two bodies share the same coordinate origin so they can be imported
+    The three bodies share the same coordinate origin so they can be imported
     into a slicer as a multi-material assembly without alignment.
     """
     if config is None:
@@ -615,16 +690,19 @@ def generate_terrain_stls(
     terrain_stl = _build_stl(terrain_tris)
 
     # ── Track STL ───────────────────────────────────────────────────────────
-    xy_m = project_points(track_data.points)
-    lats = [p.lat for p in track_data.points]
-    lons = [p.lon for p in track_data.points]
-
+    # Map directly from lat/lon → model XY so padding is correctly reflected.
     track_tris = _build_track_triangles(
-        xy_m, dem, config,
+        track_data.points, dem, config,
         x_size, y_size, z_terrain_base, ele_min, ele_range,
-        dem.lat_min, dem.lat_max, dem.lon_min, dem.lon_max,
     )
 
     track_stl = _build_stl(track_tris)
 
-    return terrain_stl, track_stl
+    # ── Water STL ───────────────────────────────────────────────────────────
+    water_tris = _build_water_triangles(
+        dem, config, x_size, y_size, z_terrain_base, ele_min, ele_range
+    )
+
+    water_stl = _build_stl(water_tris)
+
+    return terrain_stl, track_stl, water_stl

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import struct
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -171,6 +172,15 @@ async def render_terrain(
         gt=0,
         description="Height the track ribbon is raised above the terrain (mm)",
     ),
+    sea_level_m: float = Query(
+        0.0,
+        description=(
+            "Real-world elevation threshold (m) below which DEM cells are "
+            "treated as water and emitted in water.stl. "
+            "SRTM returns 0 m for ocean/sea; raise slightly (e.g. 5) to "
+            "also capture shallow coastal water."
+        ),
+    ),
     dem_resolution: int = Query(
         128,
         ge=16,
@@ -180,12 +190,15 @@ async def render_terrain(
 ) -> StreamingResponse:
     """Generate a 3-D printable terrain model from a GPX track.
 
-    Returns a ZIP archive with two binary STL files:
+    Returns a ZIP archive with up to three binary STL files:
 
     * **terrain.stl** – terrain surface and solid base plate.  Print in your
       main filament colour.
     * **track.stl** – raised ribbon following the GPS route.  Assign a
       contrasting colour (e.g. via filament swap or multi-material).
+    * **water.stl** – thin flat slab covering DEM cells at or below
+      ``sea_level_m``.  Assign a blue filament.  Only included when water
+      cells are present in the fetched DEM area.
 
     The base plate label includes the route name, distance, elevation gain and
     average gradient embossed in a pixel font.
@@ -200,6 +213,7 @@ async def render_terrain(
     | `terrain_height_mm` | 20 | Maximum terrain relief (mm) |
     | `track_width_mm` | 2 | Track ribbon width (mm) |
     | `track_raised_mm` | 0.8 | Track ribbon height above terrain (mm) |
+    | `sea_level_m` | 0 | Elevation threshold for water cells (m) |
     | `dem_resolution` | 128 | DEM grid size (points per side) |
     """
     raw_bytes = await gpx.read()
@@ -236,30 +250,45 @@ async def render_terrain(
         terrain_height_mm=terrain_height_mm,
         track_raised_mm=track_raised_mm,
         track_width_mm=track_width_mm,
+        sea_level_m=sea_level_m,
     )
 
     try:
-        terrain_stl, track_stl = generate_terrain_stls(track_data, dem, config)
+        terrain_stl, track_stl, water_stl = generate_terrain_stls(track_data, dem, config)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
             detail=f"STL generation failed: {exc}",
         ) from exc
 
-    # Bundle both STL files into a ZIP archive
+    has_water = struct.unpack_from("<I", water_stl, 80)[0] > 0
+
+    water_note = (
+        "  water.stl   – water/sea surface (blue filament)\n"
+        if has_water else
+        "  (no water.stl – no water cells detected in this area)\n"
+    )
+
+    # Bundle STL files into a ZIP archive
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("terrain.stl", terrain_stl)
         zf.writestr("track.stl", track_stl)
+        if has_water:
+            zf.writestr("water.stl", water_stl)
         readme = (
             "strava3d – 3D printable terrain model\n"
             "======================================\n\n"
             "Files:\n"
             "  terrain.stl  – terrain surface + base plate (main colour)\n"
-            "  track.stl    – GPS track ribbon (accent colour)\n\n"
-            "Import both files into your slicer and assign different colours.\n"
-            "For single-extruder printers, use a filament-swap colour change\n"
-            f"at z = {base_thickness_mm + terrain_height_mm:.1f} mm.\n"
+            "  track.stl    – GPS track ribbon (accent colour)\n"
+            + water_note +
+            "\n"
+            "Import all files into your slicer and assign different colours.\n"
+            "PrusaSlicer / Bambu Studio: load as multi-body project, assign\n"
+            "  terrain.stl → grey/brown, track.stl → orange/red, water.stl → blue.\n"
+            "Single-extruder: use filament-swap colour changes at:\n"
+            f"  z ≈ {base_thickness_mm:.1f} mm  (base plate / terrain interface)\n"
         )
         zf.writestr("README.txt", readme)
     buf.seek(0)

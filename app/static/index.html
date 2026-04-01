@@ -420,8 +420,8 @@
   <div class="card-terrain">
     <h2>🏔️ 3D Printable Terrain Model</h2>
     <p class="subtitle">
-      Generates two STL files from real SRTM elevation data — one for the terrain
-      and base plate, one for the track ribbon — ready for dual-colour 3D printing.
+      Generates up to three STL files from real SRTM elevation data — terrain &amp; base
+      plate, track ribbon, and an optional water surface — ready for multi-colour 3D printing.
       Uses the same GPX file selected above.
     </p>
 
@@ -450,7 +450,12 @@
         <label for="t_track_r">Track raised (mm)</label>
         <input type="number" id="t_track_r" value="0.8" min="0.2" step="0.2" />
       </div>
-      <div class="field full">
+      <div class="field">
+        <label for="t_sea_level">Sea level threshold (m)</label>
+        <input type="number" id="t_sea_level" value="0" step="1"
+               title="DEM cells at or below this elevation are written to water.stl (print in blue). SRTM uses 0 m for ocean/sea. Raise to 5–10 m for shallow coastal water." />
+      </div>
+      <div class="field">
         <label for="t_dem_res">DEM resolution (grid points per side)</label>
         <select id="t_dem_res">
           <option value="64">64 – fast preview</option>
@@ -467,6 +472,8 @@
     <div class="error-box" id="terrainErrorBox"></div>
     <p class="terrain-note">
       ⏳ Fetching SRTM elevation tiles may take 10–60 s on first use (data is cached afterwards).
+      The ZIP contains <strong>terrain.stl</strong> (main colour), <strong>track.stl</strong> (accent colour),
+      and <strong>water.stl</strong> (blue) when sea/lake cells are present.
     </p>
   </div>
 
@@ -631,6 +638,7 @@
         terrain_height_mm:  document.getElementById('t_terrain_h').value,
         track_width_mm:     document.getElementById('t_track_w').value,
         track_raised_mm:    document.getElementById('t_track_r').value,
+        sea_level_m:        document.getElementById('t_sea_level').value,
         dem_resolution:     document.getElementById('t_dem_res').value,
       });
 
